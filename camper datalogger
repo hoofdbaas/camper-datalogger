@@ -1,0 +1,166 @@
+Uses: Arduino nano, sd module, gps module and lcd display
+
+
+
+
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+//#include <Wire.h>
+#include <LCD.h>
+#include <LiquidCrystal_I2C.h>
+#include <SD.h>
+
+static const double LONDON_LAT = 52.683833, LONDON_LON = 4.8084357;// Broek dus
+File logboek;
+float afstand = 0;
+float lati = 0.0, lon = 0.0;
+LiquidCrystal_I2C lcd(0x27, 2, 2, 0, 4, 5, 6, 7);
+TinyGPSPlus gps;
+SoftwareSerial ss(7, 8);
+int tijdzone = 1;   //UTC +1 of +2
+
+void setup()
+{
+  lcd.begin (16, 2);  //twee regels, 16 kolommen
+  lcd.setBacklightPin(3, POSITIVE);//backlight aan
+  lcd.setBacklight(HIGH);
+  lcd.setCursor(0, 0);
+  lcd.print("   ALWEER EEN");
+  lcd.setCursor(0, 1);
+  lcd.print("TOMELOOS PRODUCT");
+  // Serial.begin(9600);
+  ss.begin(9600);
+
+  if (!SD.begin(4))
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(" GEEN SD-KAART!");
+ //   lcd.setCursor(0, 1);
+ //   lcd.print("PLAATS SD/RESET!");
+    smartDelay(30000);    //wacht 30 seconde en ga dan door zonder sd-kaart te gebruiken
+  }
+  else  if (!SD.exists("Logboek.csv"))
+  {
+    logboek = SD.open("Logboek.csv", FILE_WRITE);
+    logboek.println("LAT,LON,DATUM,TIJD,TIJDZONE,SNELHEID,DAGTRIP,HOOGTE");
+    logboek.close();
+  }
+  smartDelay(5000);
+  pinMode(2, INPUT);
+
+}
+
+
+void loop()
+{
+
+  if (digitalRead(2) == HIGH)
+    tijdzone = 1;   //UTC +1 of +2
+  else tijdzone = 2;
+  if (gps.location.isValid())
+  {
+    unsigned long distanceKmToLondon =
+      (unsigned long)TinyGPSPlus::distanceBetween(
+        gps.location.lat(),
+        gps.location.lng(),
+        LONDON_LAT,
+        LONDON_LON) / 1000;
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("HOOG/SAT ");
+    lcd.setCursor(9, 0);
+    lcd.print(int(gps.altitude.meters()));
+    lcd.setCursor(0, 1);
+    lcd.print("BOL/SPD ");
+    lcd.setCursor(9, 1);
+    lcd.print(distanceKmToLondon);
+    //lcd.print(TinyGPSPlus::cardinal(gps.course.value()));
+    lcd.setCursor(13, 1);
+    lcd.print(int(gps.speed.kmph()));
+    lcd.setCursor(14, 0);
+    lcd.print(gps.satellites.value());
+    //   smartDelay(1000);
+  }
+  else
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WACHT OP GPS");
+ //   lcd.setCursor(0, 1);
+    //lcd.print(tijdzone);
+//    lcd.print("   SIGNAAL");
+    smartDelay(2000); //wacht 2 secondes
+  }
+
+  logboek = SD.open("Logboek.csv", FILE_WRITE);
+  if (logboek && gps.location.isValid() )
+  {
+    if (lati != 0.0 && lon != 0.0  && gps.speed.isValid() && gps.speed.kmph() >= 3 )  // oude fix EN snelheid > 3 km/hr
+      afstand += calc_dist(gps.location.lat(), gps.location.lng(), lati, lon);
+    logboek.print(gps.location.lat(), 6);
+    logboek.print(",");
+    logboek.print(gps.location.lng(), 6);
+    logboek.print(",");
+    logboek.print(gps.date.year());
+    logboek.print("-");
+    logboek.print(gps.date.month());
+    logboek.print("-");
+    logboek.print(gps.date.day());
+    logboek.print(",");
+    logboek.print(gps.time.hour() + tijdzone);
+    logboek.print(":");
+    logboek.print(gps.time.minute());
+    logboek.print(":");
+    logboek.print(gps.time.second());
+    logboek.print(",");
+    if (tijdzone == 2)
+      logboek.print("CEST,");
+    else
+      logboek.print("CET,");
+    logboek.print(int(gps.speed.kmph()));
+    logboek.print(",");
+    logboek.print(afstand, 1);
+    logboek.print(",");
+    logboek.println(int(gps.altitude.meters()));
+    lati = gps.location.lat();
+    lon = gps.location.lng();
+  }
+  else
+    Serial.println("kan file niet openen of geen gps ontvangst!");
+  logboek.close();
+  smartDelay(2000);
+}
+
+static void smartDelay(unsigned long ms)
+{
+  unsigned long start = millis();
+  do
+  {
+    while (ss.available())
+      gps.encode(ss.read());
+  } while (millis() - start < ms);
+}
+
+float calc_dist(float flat1, float flon1, float flat2, float flon2)
+{
+  float dist_calc = 0;
+  float dist_calc2 = 0;
+  float diflat = 0;
+  float diflon = 0;
+  diflat = radians(flat2 - flat1);
+  flat1 = radians(flat1);
+  flat2 = radians(flat2);
+  diflon = radians((flon2) - (flon1));
+
+  dist_calc = (sin(diflat / 2.0) * sin(diflat / 2.0));
+  dist_calc2 = cos(flat1);
+  dist_calc2 *= cos(flat2);
+  dist_calc2 *= sin(diflon / 2.0);
+  dist_calc2 *= sin(diflon / 2.0);
+  dist_calc += dist_calc2;
+  dist_calc = (2 * atan2(sqrt(dist_calc), sqrt(1.0 - dist_calc)));
+  dist_calc *= 6371.0; //Converting to kilometers
+  return dist_calc;
+}
